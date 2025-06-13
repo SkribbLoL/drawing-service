@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkribbLoL Drawing Test</title>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        canvas {
+            border: 2px solid #333;
+            border-radius: 5px;
+            cursor: crosshair;
+            display: block;
+            margin: 0 auto;
+        }
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            opacity: 0.8;
+        }
+        .join-btn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .clear-btn {
+            background-color: #f44336;
+            color: white;
+        }
+        .leave-btn {
+            background-color: #ff9800;
+            color: white;
+        }
+        input[type="color"] {
+            width: 50px;
+            height: 40px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        input[type="range"] {
+            width: 150px;
+        }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .users-list {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SkribbLoL Drawing Test</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>Room Code:</label>
+                <input type="text" id="roomCode" placeholder="Enter room code" value="TEST123">
+            </div>
+            <div class="control-group">
+                <label>Username:</label>
+                <input type="text" id="username" placeholder="Your username" value="Player1">
+            </div>
+            <button class="join-btn" onclick="joinRoom()">Join Room</button>
+            <button class="leave-btn" onclick="leaveRoom()">Leave Room</button>
+            
+            <div class="control-group">
+                <label>Color:</label>
+                <input type="color" id="colorPicker" value="#000000" onchange="changeColor()">
+            </div>
+            <div class="control-group">
+                <label>Pen Size:</label>
+                <input type="range" id="penSize" min="1" max="50" value="5" onchange="changePenSize()">
+                <span id="penSizeValue">5</span>
+            </div>
+            <button class="clear-btn" onclick="clearCanvas()">Clear Canvas</button>
+        </div>
+
+        <canvas id="canvas" width="800" height="600"></canvas>
+        
+        <div id="status" class="status disconnected">Not connected</div>
+        <div id="usersList" class="users-list" style="display: none;">
+            <strong>Users in room:</strong>
+            <div id="usersContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const socket = io('http://localhost:5001');
+        
+        let isDrawing = false;
+        let currentColor = '#000000';
+        let currentPenSize = 5;
+        let currentRoomCode = '';
+        let currentUserId = '';
+        let currentUsername = '';
+
+        // Socket event handlers
+        socket.on('connect', () => {
+            updateStatus('Connected to drawing service', 'connected');
+        });
+
+        socket.on('disconnect', () => {
+            updateStatus('Disconnected from drawing service', 'disconnected');
+            document.getElementById('usersList').style.display = 'none';
+        });
+
+        socket.on('error', (data) => {
+            alert('Error: ' + data.message);
+        });
+
+        socket.on('canvas-state', (data) => {
+            console.log('Received canvas state:', data);
+            redrawCanvas(data.drawings);
+        });
+
+        socket.on('draw-start', (data) => {
+            console.log('Draw start:', data);
+            ctx.beginPath();
+            ctx.strokeStyle = data.color || '#000000';
+            ctx.lineWidth = data.penSize || 5;
+            ctx.lineCap = 'round';
+            ctx.moveTo(data.x, data.y);
+        });
+
+        socket.on('draw-move', (data) => {
+            console.log('Draw move:', data);
+            ctx.lineTo(data.x, data.y);
+            ctx.stroke();
+        });
+
+        socket.on('draw-end', () => {
+            console.log('Draw end');
+            ctx.beginPath();
+        });
+
+        socket.on('canvas-cleared', (data) => {
+            console.log('Canvas cleared by:', data.username);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        });
+
+        socket.on('user-joined-drawing', (data) => {
+            console.log('User joined:', data.username);
+            updateStatus(`${data.username} joined the room`, 'connected');
+        });
+
+        socket.on('user-left-drawing', (data) => {
+            console.log('User left:', data.username);
+            updateStatus(`${data.username} left the room`, 'connected');
+        });
+
+        // Canvas drawing events
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+
+        function startDrawing(e) {
+            if (!currentRoomCode) {
+                alert('Please join a room first!');
+                return;
+            }
+            
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // Local drawing
+            ctx.beginPath();
+            ctx.strokeStyle = currentColor;
+            ctx.lineWidth = currentPenSize;
+            ctx.lineCap = 'round';
+            ctx.moveTo(x, y);
+
+            // Emit to server
+            socket.emit('draw-start', {
+                x: x,
+                y: y,
+                color: currentColor,
+                penSize: currentPenSize
+            });
+        }
+
+        function draw(e) {
+            if (!isDrawing || !currentRoomCode) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // Local drawing
+            ctx.lineTo(x, y);
+            ctx.stroke();
+
+            // Emit to server
+            socket.emit('draw-move', {
+                x: x,
+                y: y,
+                color: currentColor,
+                penSize: currentPenSize
+            });
+        }
+
+        function stopDrawing() {
+            if (!isDrawing) return;
+            
+            isDrawing = false;
+            ctx.beginPath();
+
+            // Emit to server
+            socket.emit('draw-end', {});
+        }
+
+        // Room management
+        function joinRoom() {
+            const roomCode = document.getElementById('roomCode').value.trim();
+            const username = document.getElementById('username').value.trim();
+
+            if (!roomCode || !username) {
+                alert('Please enter both room code and username!');
+                return;
+            }
+
+            currentRoomCode = roomCode;
+            currentUsername = username;
+            currentUserId = 'user_' + Math.random().toString(36).substr(2, 9);
+
+            socket.emit('join-drawing-room', {
+                roomCode: roomCode,
+                userId: currentUserId,
+                username: username
+            });
+
+            updateStatus(`Joining room ${roomCode} as ${username}...`, 'connected');
+            document.getElementById('usersList').style.display = 'block';
+        }
+
+        function leaveRoom() {
+            if (!currentRoomCode) return;
+
+            socket.emit('leave-drawing-room');
+            currentRoomCode = '';
+            currentUserId = '';
+            currentUsername = '';
+            
+            updateStatus('Left the room', 'disconnected');
+            document.getElementById('usersList').style.display = 'none';
+        }
+
+        // Tool controls
+        function changeColor() {
+            currentColor = document.getElementById('colorPicker').value;
+            socket.emit('change-color', { color: currentColor });
+        }
+
+        function changePenSize() {
+            currentPenSize = parseInt(document.getElementById('penSize').value);
+            document.getElementById('penSizeValue').textContent = currentPenSize;
+            socket.emit('change-pen-size', { size: currentPenSize });
+        }
+
+        function clearCanvas() {
+            if (!currentRoomCode) {
+                alert('Please join a room first!');
+                return;
+            }
+            
+            if (confirm('Are you sure you want to clear the canvas for everyone?')) {
+                socket.emit('clear-canvas');
+            }
+        }
+
+        // Utility functions
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = 'status ' + type;
+        }
+
+        function redrawCanvas(drawings) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (!drawings || drawings.length === 0) return;
+
+            drawings.forEach(drawing => {
+                if (drawing.type === 'clear-canvas') {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                } else if (drawing.type === 'draw-start') {
+                    ctx.beginPath();
+                    ctx.strokeStyle = drawing.color || '#000000';
+                    ctx.lineWidth = drawing.penSize || 5;
+                    ctx.lineCap = 'round';
+                    ctx.moveTo(drawing.x, drawing.y);
+                } else if (drawing.type === 'draw-move') {
+                    ctx.lineTo(drawing.x, drawing.y);
+                    ctx.stroke();
+                } else if (drawing.type === 'draw-end') {
+                    ctx.beginPath();
+                }
+            });
+        }
+
+        // Initialize pen size display
+        document.getElementById('penSizeValue').textContent = currentPenSize;
+    </script>
+</body>
+</html> 
