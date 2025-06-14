@@ -4,13 +4,16 @@ const redis = require('../RedisSingleton');
 class DrawingSocketHandler {
   constructor() {
     this.io = null;
+    this.messageBus = null;
+    this.currentDrawers = new Map(); // Track current drawer per room
   }
 
   /**
    * Initialize the socket handlers
    */
-  initialize() {
+  initialize(messageBus = null) {
     this.io = socketInstance.getIO();
+    this.messageBus = messageBus;
     this.setupEventHandlers();
     console.log('Drawing socket handlers initialized');
   }
@@ -139,6 +142,15 @@ class DrawingSocketHandler {
     const { roomCode, userId } = socket;
     if (!roomCode) return;
 
+    // Check if user is allowed to draw
+    const canDraw = await this.checkDrawingPermission(roomCode, userId);
+    if (!canDraw) {
+      socket.emit('drawing-error', { 
+        message: 'You are not the current drawer' 
+      });
+      return;
+    }
+
     const drawingData = {
       type: 'draw-start',
       userId,
@@ -162,6 +174,10 @@ class DrawingSocketHandler {
     const { roomCode, userId } = socket;
     if (!roomCode) return;
 
+    // Check if user is allowed to draw
+    const canDraw = await this.checkDrawingPermission(roomCode, userId);
+    if (!canDraw) return; // Silently ignore invalid draw moves
+
     const drawingData = {
       type: 'draw-move',
       userId,
@@ -184,6 +200,10 @@ class DrawingSocketHandler {
   async handleDrawEnd(socket, data) {
     const { roomCode, userId } = socket;
     if (!roomCode) return;
+
+    // Check if user is allowed to draw
+    const canDraw = await this.checkDrawingPermission(roomCode, userId);
+    if (!canDraw) return; // Silently ignore
 
     const drawingData = {
       type: 'draw-end',
@@ -341,21 +361,79 @@ class DrawingSocketHandler {
   }
 
   /**
-   * Clear canvas for all users in a room (called from game service)
+   * Check if user has permission to draw
+   * @param {string} roomCode - Room code
+   * @param {string} userId - User ID
+   * @returns {boolean} - Can user draw
+   */
+  async checkDrawingPermission(roomCode, userId) {
+    // First check local cache
+    const currentDrawer = this.currentDrawers.get(roomCode);
+    if (currentDrawer === userId) {
+      return true;
+    }
+
+    // Ask game service via message bus
+    if (this.messageBus) {
+      try {
+        const response = await this.messageBus.askGameService('get-current-drawer', { roomCode });
+        
+        // Update local cache
+        if (response.currentDrawer) {
+          this.currentDrawers.set(roomCode, response.currentDrawer);
+        }
+        
+        return response.currentDrawer === userId && response.gamePhase === 'drawing';
+      } catch (error) {
+        console.error('Error checking drawing permission:', error);
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Set current drawer for a room (called by message bus)
+   * @param {string} roomCode - Room code
+   * @param {string} drawerId - Drawer user ID
+   */
+  setCurrentDrawer(roomCode, drawerId) {
+    this.currentDrawers.set(roomCode, drawerId);
+    
+    // Notify all users in room about drawer change
+    this.io.to(roomCode).emit('drawer-changed', {
+      drawerId,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Clear canvas for a room and notify users
    * @param {string} roomCode - Room code
    */
   async clearCanvasForRoom(roomCode) {
-    try {
-      // Clear canvas data in Redis
-      await redis.del(`drawing:room:${roomCode}:canvas`);
+    // Clear stored drawing data
+    await redis.del(`drawing:room:${roomCode}:data`);
+    
+    // Notify all users in room
+    this.io.to(roomCode).emit('canvas-cleared', {
+      roomCode,
+      timestamp: Date.now()
+    });
+  }
 
-      // Notify all clients in the room
-      this.io.to(roomCode).emit('canvas-cleared');
-
-      console.log(`Canvas cleared for room ${roomCode}`);
-    } catch (error) {
-      console.error('Error clearing canvas for room:', error);
-    }
+  /**
+   * Notify users that canvas was cleared
+   * @param {string} roomCode - Room code
+   * @param {string} reason - Reason for clearing
+   */
+  notifyCanvasCleared(roomCode, reason) {
+    this.io.to(roomCode).emit('canvas-cleared', {
+      roomCode,
+      reason,
+      timestamp: Date.now()
+    });
   }
 
   /**
