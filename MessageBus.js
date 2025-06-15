@@ -15,58 +15,75 @@ class DrawingMessageBus {
   async initialize(drawingService) {
     this.drawingService = drawingService;
 
-    try {
-      // Connect to RabbitMQ
-      const rabbitmqUrl = process.env.RABBITMQ_URL || 'amqp://localhost:5672';
-      this.connection = await amqp.connect(rabbitmqUrl);
-      this.channel = await this.connection.createChannel();
+    await this.connectWithRetry();
+  }
 
-      // Declare exchanges
-      await this.channel.assertExchange(this.exchanges.gameEvents, 'topic', {
-        durable: true,
-      });
-      await this.channel.assertExchange(this.exchanges.gameRequests, 'direct', {
-        durable: true,
-      });
-      await this.channel.assertExchange(this.exchanges.gameResponses, 'direct', {
-        durable: true,
-      });
+  async connectWithRetry(maxRetries = 5, retryDelay = 5000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Attempting RabbitMQ connection (attempt ${attempt}/${maxRetries})...`);
+        
+        // Connect to RabbitMQ
+        const rabbitmqUrl = process.env.RABBITMQ_URL || 'amqp://localhost:5672';
+        this.connection = await amqp.connect(rabbitmqUrl);
+        this.channel = await this.connection.createChannel();
 
-      // Create queue for game events
-      const gameEventsQueue = await this.channel.assertQueue('drawing.game.events', {
-        durable: true,
-      });
-      await this.channel.bindQueue(
-        gameEventsQueue.queue,
-        this.exchanges.gameEvents,
-        'game.event.*'
-      );
+        // Declare exchanges
+        await this.channel.assertExchange(this.exchanges.gameEvents, 'topic', {
+          durable: true,
+        });
+        await this.channel.assertExchange(this.exchanges.gameRequests, 'direct', {
+          durable: true,
+        });
+        await this.channel.assertExchange(this.exchanges.gameResponses, 'direct', {
+          durable: true,
+        });
 
-      // Listen for game events
-      await this.channel.consume(
-        gameEventsQueue.queue,
-        (msg) => {
-          if (msg) {
-            this.handleGameEvent(msg);
-            this.channel.ack(msg);
-          }
-        },
-        { noAck: false }
-      );
+        // Create queue for game events
+        const gameEventsQueue = await this.channel.assertQueue('drawing.game.events', {
+          durable: true,
+        });
+        await this.channel.bindQueue(
+          gameEventsQueue.queue,
+          this.exchanges.gameEvents,
+          'game.event.*'
+        );
 
-      // Handle connection errors
-      this.connection.on('error', (err) => {
-        console.error('RabbitMQ connection error:', err);
-      });
+        // Listen for game events
+        await this.channel.consume(
+          gameEventsQueue.queue,
+          (msg) => {
+            if (msg) {
+              this.handleGameEvent(msg);
+              this.channel.ack(msg);
+            }
+          },
+          { noAck: false }
+        );
 
-      this.connection.on('close', () => {
-        console.log('RabbitMQ connection closed');
-      });
+        // Handle connection errors
+        this.connection.on('error', (err) => {
+          console.error('RabbitMQ connection error:', err);
+        });
 
-      console.log('Drawing message bus initialized with RabbitMQ');
-    } catch (error) {
-      console.error('Failed to initialize RabbitMQ message bus:', error);
-      throw error;
+        this.connection.on('close', () => {
+          console.log('RabbitMQ connection closed');
+        });
+
+        console.log('Drawing message bus initialized with RabbitMQ');
+        return; // Success, exit retry loop
+        
+      } catch (error) {
+        console.error(`RabbitMQ connection attempt ${attempt} failed:`, error.message);
+        
+        if (attempt === maxRetries) {
+          console.error('Failed to initialize RabbitMQ message bus after all retries');
+          throw error;
+        }
+        
+        console.log(`Retrying in ${retryDelay/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      }
     }
   }
 
