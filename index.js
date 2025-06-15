@@ -21,13 +21,18 @@ const drawingRouter = require('./routers/DrawingRouter');
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/', drawingRouter);
+app.use('/drawing', drawingRouter);
 
 // Initialize Socket.io singleton
 socketSingleton.setup(server);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// Health check endpoint with prefix
+app.get('/drawing/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 

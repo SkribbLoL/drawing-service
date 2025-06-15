@@ -30,6 +30,8 @@ class SocketSingleton {
         origin: '*', // In production, restrict this to your frontend URL
         methods: ['GET', 'POST'],
       },
+      path: '/drawing/socket.io/',
+      allowEIO3: true,
     });
 
     console.log('Socket.io initialized for drawing service');
