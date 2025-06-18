@@ -103,6 +103,11 @@ class DrawingMessageBus {
           await this.drawingService.clearCanvasForRoom(roomCode);
           this.drawingService.notifyCanvasCleared(roomCode, 'Game ended');
           break;
+        case 'game-restarted':
+          // Clear canvas when game is restarted
+          await this.drawingService.clearCanvasForRoom(roomCode);
+          this.drawingService.notifyCanvasCleared(roomCode, 'Game restarted');
+          break;
         case 'word-selected':
           // Update current drawer
           if (data.drawerId) {
