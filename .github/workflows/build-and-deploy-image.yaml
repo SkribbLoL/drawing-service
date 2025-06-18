@@ -57,7 +57,7 @@ on:
 
 env:
   IMG_NAME: veljkoskrbic/skribblol-drawing-service
-  GKE_CLUSTER: skribblol-cluster
+  GKE_CLUSTER: skribblol-cluster-gcp
   GKE_ZONE: europe-west4-a
   DEPLOYMENT_NAME: drawing-service-deployment
 
